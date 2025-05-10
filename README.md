@@ -19,6 +19,14 @@ Docker container which runs the latest [qBittorrent](https://github.com/qbittorr
 * Created with [Unraid](https://unraid.net/) in mind
 * BitTorrent port 8999 exposed by default
 
+# Updates
+## 2025 05 10
+* qBittorrent updated to 5.1.0
+* Libtorrent updated to 2.0.11
+* Boost updated to 1.86.0
+* QT updated to 6.9.0
+* Full rewrite of the dockerfile to split it into 2 stages: the first one for compiling, and the second one as final image.
+
 ## Run container from Docker registry
 The container is available from the Docker registry and this is the simplest way to get it  
 To run the container use this command, with additional parameters, please refer to the Variables, Volumes, and Ports section:
