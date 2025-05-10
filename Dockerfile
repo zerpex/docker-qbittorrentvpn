@@ -1,234 +1,162 @@
-# Latest release Qbittorrent, OpenVPN and WireGuard
-# Forked from DyonR/docker-qbittorrentvpn
-FROM debian:bullseye-slim
+# ----------- Stage 1: Build environment -----------
+FROM debian:bookworm-slim AS builder
 
-WORKDIR /opt
+ARG QBITTORRENT_VERSION=5.1.0
+ARG LIBTORRENT_VERSION=2.0.11
+ARG BOOST_VERSION=1.86.0
+ARG QT_VERSION=6.9.0
 
-RUN usermod -u 99 nobody
+ENV DEBIAN_FRONTEND=noninteractive
 
-# Make directories
-RUN mkdir -p /downloads /config/qBittorrent /etc/openvpn /etc/qbittorrent
-
-# Install boost
-RUN apt update \
-    && apt upgrade -y  \
-    && apt install -y --no-install-recommends \
-    curl \
-    ca-certificates \
-    g++ \
-    libxml2-utils \
-    && BOOST_VERSION_DOT=$(curl -sX GET "https://www.boost.org/feed/news.rss" | xmllint --xpath '//rss/channel/item/title/text()' - | awk -F 'Version' '{print $2 FS}' - | sed -e 's/Version//g;s/\ //g' | xargs | awk 'NR==1{print $1}' -) \
-    && BOOST_VERSION=$(echo ${BOOST_VERSION_DOT} | head -n 1 | sed -e 's/\./_/g') \
-    && curl -o /opt/boost_${BOOST_VERSION}.tar.gz -L https://boostorg.jfrog.io/artifactory/main/release/${BOOST_VERSION_DOT}/source/boost_${BOOST_VERSION}.tar.gz \
-    && tar -xzf /opt/boost_${BOOST_VERSION}.tar.gz -C /opt \
-    && cd /opt/boost_${BOOST_VERSION} \
-    && ./bootstrap.sh --prefix=/usr \
-    && ./b2 --prefix=/usr install \
-    && cd /opt \
-    && rm -rf /opt/* \
-    && apt -y purge \
-    curl \
-    ca-certificates \
-    g++ \
-    libxml2-utils \
-    && apt-get clean \
-    && apt --purge autoremove -y \
-    && rm -rf \
-    /var/lib/apt/lists/* \
-    /tmp/* \
-    /var/tmp/*
-
-# Install Ninja
-RUN apt update \
-    && apt upgrade -y \
-    && apt install -y --no-install-recommends \
-    ca-certificates \
-    curl \
-    jq \
-    unzip \
-    && NINJA_ASSETS=$(curl -sX GET "https://api.github.com/repos/ninja-build/ninja/releases" | jq '.[] | select(.prerelease==false) | .assets_url' | head -n 1 | tr -d '"') \
-    && NINJA_DOWNLOAD_URL=$(curl -sX GET ${NINJA_ASSETS} | jq '.[] | select(.name | match("ninja-linux";"i")) .browser_download_url' | tr -d '"') \
-    && curl -o /opt/ninja-linux.zip -L ${NINJA_DOWNLOAD_URL} \
-    && unzip /opt/ninja-linux.zip -d /opt \
-    && mv /opt/ninja /usr/local/bin/ninja \
-    && chmod +x /usr/local/bin/ninja \
-    && rm -rf /opt/* \
-    && apt purge -y \
-    ca-certificates \
-    curl \
-    jq \
-    unzip \
-    && apt-get clean \
-    && apt --purge autoremove -y \
-    && rm -rf \
-    /var/lib/apt/lists/* \
-    /tmp/* \
-    /var/tmp/*
-
-# Install cmake
-RUN apt update \
-    && apt upgrade -y \
-    && apt install -y  --no-install-recommends \
-    ca-certificates \
-    curl \
-    jq \
-    && CMAKE_ASSETS=$(curl -sX GET "https://api.github.com/repos/Kitware/CMake/releases" | jq '.[] | select(.prerelease==false) | .assets_url' | head -n 1 | tr -d '"') \
-    && CMAKE_DOWNLOAD_URL=$(curl -sX GET ${CMAKE_ASSETS} | jq '.[] | select(.name | match("Linux-x86_64.sh";"i")) .browser_download_url' | tr -d '"') \
-    && curl -o /opt/cmake.sh -L ${CMAKE_DOWNLOAD_URL} \
-    && chmod +x /opt/cmake.sh \
-    && /bin/bash /opt/cmake.sh --skip-license --prefix=/usr \
-    && rm -rf /opt/* \
-    && apt purge -y \
-    ca-certificates \
-    curl \
-    jq \
-    && apt-get clean \
-    && apt --purge autoremove -y \
-    && rm -rf \
-    /var/lib/apt/lists/* \
-    /tmp/* \
-    /var/tmp/*
-
-# Compile and install libtorrent-rasterbar
-RUN apt update \
-    && apt upgrade -y \
-    && apt install -y --no-install-recommends \
+# Install build dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
-    ca-certificates \
-    curl \
-    jq \
-    libssl-dev \
-    && LIBTORRENT_ASSETS=$(curl -sX GET "https://api.github.com/repos/arvidn/libtorrent/releases" | jq '.[] | select(.prerelease==false) | select(.target_commitish=="RC_1_2") | .assets_url' | head -n 1 | tr -d '"') \
-    && LIBTORRENT_DOWNLOAD_URL=$(curl -sX GET ${LIBTORRENT_ASSETS} | jq '.[0] .browser_download_url' | tr -d '"') \
-    && LIBTORRENT_NAME=$(curl -sX GET ${LIBTORRENT_ASSETS} | jq '.[0] .name' | tr -d '"') \
-    && curl -o /opt/${LIBTORRENT_NAME} -L ${LIBTORRENT_DOWNLOAD_URL} \
-    && tar -xzf /opt/${LIBTORRENT_NAME} \
-    && rm /opt/${LIBTORRENT_NAME} \
-    && cd /opt/libtorrent-rasterbar* \
-    && cmake -G Ninja -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX:PATH=/usr -DCMAKE_CXX_STANDARD=17 \
-    && cmake --build build --parallel $(nproc) \
-    && cmake --install build \
-    && cd /opt \
-    && rm -rf /opt/* \
-    && apt purge -y \
-    build-essential \
-    ca-certificates \
-    curl \
-    jq \
-    libssl-dev \
-    && apt-get clean \
-    && apt --purge autoremove -y  \
-    && rm -rf \
-    /var/lib/apt/lists/* \
-    /tmp/* \
-    /var/tmp/*
-
-# Compile and install qBittorrent
-RUN apt update \
-    && apt upgrade -y \
-    && apt install -y --no-install-recommends \
-    build-essential \
-    ca-certificates \
-    curl \
-    git \
-    jq \
-    libssl-dev \
     pkg-config \
-    qtbase5-dev \
-    qttools5-dev \
-    qtbase5-private-dev \
-    zlib1g-dev \
-    && QBITTORRENT_RELEASE=$(curl -sX GET "https://api.github.com/repos/qBittorrent/qBittorrent/tags" | jq '.[] | select(.name | index ("alpha") | not) | select(.name | index ("beta") | not) | select(.name | index ("rc") | not) | .name' | head -n 1 | tr -d '"') \
-    && curl -o /opt/qBittorrent-${QBITTORRENT_RELEASE}.tar.gz -L "https://github.com/qbittorrent/qBittorrent/archive/${QBITTORRENT_RELEASE}.tar.gz" \
-    && tar -xzf /opt/qBittorrent-${QBITTORRENT_RELEASE}.tar.gz \
-    && rm /opt/qBittorrent-${QBITTORRENT_RELEASE}.tar.gz \
-    && cd /opt/qBittorrent-${QBITTORRENT_RELEASE} \
-    && cmake -G Ninja -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr/local -DGUI=OFF -DCMAKE_CXX_STANDARD=17 \
-    && cmake --build build --parallel $(nproc) \
-    && cmake --install build \
-    && cd /opt \
-    && rm -rf /opt/* \
-    && apt purge -y \
-    build-essential \
-    ca-certificates \
-    curl \
+    automake \
+    libtool \
     git \
-    jq \
-    libssl-dev \
-    pkg-config \
-    qtbase5-dev \
-    qttools5-dev \
-    qtbase5-private-dev \
-    zlib1g-dev \
-    && apt-get clean \
-    && apt --purge autoremove -y \
-    && rm -rf \
-    /var/lib/apt/lists/* \
-    /tmp/* \
-    /var/tmp/*
-
-# Install WireGuard and some other dependencies some of the scripts in the container rely on.
-RUN echo "deb http://deb.debian.org/debian/ unstable main" > /etc/apt/sources.list.d/unstable-wireguard.list \
-    && printf 'Package: *\nPin: release a=unstable\nPin-Priority: 150\n' > /etc/apt/preferences.d/limit-unstable \
-    && apt update \
-    && apt install -y --no-install-recommends \
+    cmake \
+    ninja-build \
+    python3 \
+    perl \
+    curl \
     ca-certificates \
-    dos2unix \
-    inetutils-ping \
-    ipcalc \
-    iptables \
-    kmod \
+    libxkbcommon-x11-dev \
+    libxcb1-dev \
+    libx11-dev \
+    libxext-dev \
+    libxrender-dev \
+    libxi-dev \
+    libfontconfig1-dev \
+    libfreetype6-dev \
+    libpng-dev \
+    libjpeg-dev \
+    libssl-dev \
+    libdbus-1-dev \
+    zlib1g-dev \
+    libgl1-mesa-dev \
+    libdrm-dev \
+    libsqlite3-dev \
+    libxcb-keysyms1-dev \
+    libxcb-image0-dev \
+    libxcb-shm0-dev \
+    libxcb-icccm4-dev \
+    libxcb-sync-dev \
+    libxcb-render-util0-dev \
+    libxcb-xfixes0-dev \
+    libxcb-shape0-dev \
+    libxcb-randr0-dev \
+    libxcb-glx0-dev \
+    libxcb-xinerama0-dev \
+    libxcb-util-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /tmp
+
+# ----------- Boost -----------
+RUN BOOST_VERSION_UNDERSCORE=$(echo $BOOST_VERSION | sed 's/\./_/g') && \
+    curl -L https://archives.boost.io/release/${BOOST_VERSION}/source/boost_${BOOST_VERSION_UNDERSCORE}.tar.gz | tar xz && \
+    cd boost_${BOOST_VERSION_UNDERSCORE} && \
+    ./bootstrap.sh --prefix=/usr/local && \
+    ./b2 install -j$(nproc) && \
+    cd .. && rm -rf boost_${BOOST_VERSION_UNDERSCORE}
+
+# ----------- Qt -----------
+    RUN curl -L https://download.qt.io/official_releases/qt/6.9/${QT_VERSION}/single/qt-everywhere-src-${QT_VERSION}.tar.xz | tar xJ && \
+    cd qt-everywhere-src-${QT_VERSION} && \
+    ./configure -prefix /opt/Qt-${QT_VERSION} -opensource -confirm-license -nomake examples -nomake tests && \
+    cmake --build . --parallel $(nproc) && \
+    cmake --install . && \
+    cd .. && rm -rf qt-everywhere-src-${QT_VERSION}
+
+ENV CMAKE_PREFIX_PATH=/opt/Qt-${QT_VERSION}/lib/cmake
+
+# ----------- Libtorrent -----------
+RUN curl -L https://github.com/arvidn/libtorrent/releases/download/v${LIBTORRENT_VERSION}/libtorrent-rasterbar-${LIBTORRENT_VERSION}.tar.gz | tar xz && \
+    cd libtorrent-rasterbar-${LIBTORRENT_VERSION} && \
+    cmake -G Ninja -B build \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_INSTALL_PREFIX=/usr/local \
+        -DCMAKE_CXX_STANDARD=17 \
+        -Dpython-bindings=OFF \
+        -Dbuild_tests=OFF \
+        -Ddeprecated-functions=OFF && \
+    cmake --build build --parallel $(nproc) && \
+    cmake --install build && \
+    cd .. && rm -rf libtorrent-rasterbar-${LIBTORRENT_VERSION}
+
+# ----------- qBittorrent-nox -----------
+RUN curl -L https://github.com/qbittorrent/qBittorrent/archive/refs/tags/release-${QBITTORRENT_VERSION}.tar.gz | tar xz && \
+    cd qBittorrent-release-${QBITTORRENT_VERSION} && \
+    cmake -G Ninja -B build \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_INSTALL_PREFIX=/usr/local \
+        -DGUI=OFF \
+        -DCMAKE_CXX_STANDARD=17 && \
+    cmake --build build --parallel $(nproc) && \
+    cmake --install build && \
+    cd .. && rm -rf qBittorrent-release-${QBITTORRENT_VERSION}
+
+
+# ----------- Stage 2: Runtime image -----------
+FROM debian:bookworm-slim
+
+LABEL maintainer="zerpex <zerpex@jayjay.pm>"
+
+# Install runtime dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libssl3 \
     libqt5network5 \
     libqt5xml5 \
     libqt5sql5 \
-    libssl1.1 \
-    moreutils \
-    net-tools \
-    openresolv \
+    libbrotli1 \
     openvpn \
-    procps \
     wireguard-tools \
-    && apt-get clean \
-    && apt --purge autoremove -y \
-    && rm -rf \
-    /var/lib/apt/lists/* \
-    /tmp/* \
-    /var/tmp/*
-
-# Install (un)compressing tools like unrar, 7z, unzip and zip, curl, wget, and nano
-RUN echo "deb http://deb.debian.org/debian/ bullseye non-free" > /etc/apt/sources.list.d/non-free-unrar.list \
-    && printf 'Package: *\nPin: release a=non-free\nPin-Priority: 150\n' > /etc/apt/preferences.d/limit-non-free \
-    && apt update \
-    && apt -y upgrade \
-    && apt -y install --no-install-recommends \
-    unrar \
+    unrar-free \
     p7zip-full \
-    unzip \
-    zip \
-    curl\
-    wget\
-    nano\
-    && apt-get clean \
-    && apt --purge autoremove -y \
-    && rm -rf \
-    /var/lib/apt/lists/* \
-    /tmp/* \
-    /var/tmp/*
+    nano \
+    iproute2 \
+    iptables \
+    openresolv \
+    ipcalc \
+    kmod \
+    dos2unix \
+    net-tools \
+    iputils-ping \
+    moreutils \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create user and directories
+RUN mkdir -p /downloads /config/qBittorrent /etc/openvpn /etc/qbittorrent && \
+    chown -R nobody:nogroup /downloads /config /etc/openvpn /etc/qbittorrent
 
 # Remove src_valid_mark from wg-quick
 RUN sed -i /net\.ipv4\.conf\.all\.src_valid_mark/d `which wg-quick`
 
+# Copy only the built binaries and essential files
+COPY --from=builder /usr/local/bin/qbittorrent-nox /usr/local/bin/
+COPY --from=builder /usr/local/lib/libtorrent* /usr/local/lib/
+COPY --from=builder /usr/lib/libtorrent* /usr/lib/
+COPY --from=builder /usr/local/lib/libboost* /usr/local/lib/
+COPY --from=builder /usr/lib/libboost* /usr/lib/
+COPY --from=builder /opt/Qt-6.9.0 /opt/Qt-6.9.0
+
+# Copy config files and custom scripts
+COPY openvpn/ /etc/openvpn/
+COPY qbittorrent/ /etc/qbittorrent/
+COPY bashrc/ /root/
+COPY speedtest/ /usr/bin/
+RUN chmod +x /etc/qbittorrent/*.sh \
+             /etc/qbittorrent/*.init \
+             /etc/openvpn/*.sh \
+             /usr/bin/speedtest
+RUN echo "/opt/Qt-6.9.0/lib" > /etc/ld.so.conf.d/qt6.conf && ldconfig
+
 VOLUME /config /downloads
-
-ADD openvpn/ /etc/openvpn/
-ADD qbittorrent/ /etc/qbittorrent/
-ADD bashrc/ /root/
-ADD speedtest/ /usr/bin/
-
-RUN chmod +x /etc/qbittorrent/*.sh /etc/qbittorrent/*.init /etc/openvpn/*.sh
-RUN chmod +x /usr/bin/speedtest
 
 EXPOSE 8080
 EXPOSE 8999
 EXPOSE 8999/udp
+
 CMD ["/bin/bash", "/etc/openvpn/start.sh"]
